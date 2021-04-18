@@ -1,15 +1,4 @@
 #!python3
-"""
-Python 3 wrapper for identifying objects in images
-
-Requires DLL compilation
-
-Original *nix 2.7: https://github.com/pjreddie/darknet/blob/0f110834f4e18b30d5f101bf8f1724c34b7b83db/python/darknet.py
-Windows Python 2.7 version: https://github.com/AlexeyAB/darknet/blob/fc496d52bf22a0bb257300d3c79be9cd80e722cb/build/darknet/x64/darknet.py
-
-@author: Philip Kahn, Aymeric Dujardin
-@date: 20180911
-"""
 # pylint: disable=R, W0401, W0614, W0703
 import os
 import sys
