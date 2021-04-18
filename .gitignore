@@ -1,0 +1,4 @@
+Dataset/
+**/node_modules/
+Tests/
+**/dist/
