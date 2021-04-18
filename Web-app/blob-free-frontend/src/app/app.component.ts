@@ -123,7 +123,7 @@ export class AppComponent {
 
   getTimeStamps(): void {
     var yesterday = new Date(Date.now())
-    yesterday.setHours(yesterday.getHours() + 1 - 23)
+    yesterday.setHours(yesterday.getHours() + 2 - 23)
     yesterday.setMinutes(0, 0, 0);
     this.nmc[`${yesterday.toISOString().slice(0,-1)}`] = 0;
     this.tc[`${yesterday.toISOString().slice(0,-1)}`] = 0;

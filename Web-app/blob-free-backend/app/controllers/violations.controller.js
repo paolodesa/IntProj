@@ -18,7 +18,7 @@ exports.findAll = (req, res) => {
 // Retrieve the number of distance Violations per hour in the last 24h from the database.
 exports.getLastDay = (req, res) => {
   var yesterday = new Date(Date.now())
-  yesterday.setHours(yesterday.getHours() + 1 - 23)
+  yesterday.setHours(yesterday.getHours() + 2 - 23)
   yesterday.setMinutes(0, 0, 0)
   Violations.aggregate(
     [
