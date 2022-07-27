@@ -16,6 +16,7 @@ import cv2
 import pyzed.sl as sl
 import atexit
 import pymongo
+import simpleaudio as sa
 
 # Get the top-level logger object
 log = logging.getLogger(__name__)
@@ -29,7 +30,6 @@ mycollection_dist = db["dist_violations"]
 
 IDs = []
 dist_IDs = []
-#people = []
 
 def sample(probs):
     s = sum(probs)
@@ -338,6 +338,19 @@ obj_runtime_param = None
 bodies = None
 dist_threshold = None
 
+audio_filename = 'alarm.wav'
+wave_obj = sa.WaveObject.from_wave_file(audio_filename)
+play_obj = None
+playing = False
+
+def alarmStart():
+    playing = True
+    play_obj = wave_obj.play()
+
+def alarmStop():
+    play_obj.stop()
+    playing = False
+
 def main(argv):
 
     global thresh, dist_threshold
@@ -345,11 +358,11 @@ def main(argv):
     thresh = 0.5
     darknet_path="./"
     config_path = darknet_path + "cfg/yolov4-tiny-face_mask.cfg"
-    weight_path = "yolov4-tiny-face_mask-800-augmented.weights"
+    weight_path = "yolov4-tiny-face_mask-best.weights"
     meta_path = "cfg/face_mask.data"
     svo_path = None
     zed_id = 0
-    dist_threshold = 1.0
+    dist_threshold = 1.5
 
     help_str = 'darknet_zed.py -c <config> -w <weight> -m <meta> -t <threshold> -s <svo_file> -z <zed_id> -d <distance_threshold>'
     try:
@@ -437,8 +450,6 @@ def main(argv):
     if metaMain is None:
         metaMain = load_meta(meta_path.encode("ascii"))
     if altNames is None:
-        # In thon 3, the metafile default access craps out on Windows (but not Linux)
-        # Read the names file and create a list to feed to detect
         try:
             with open(meta_path) as meta_fh:
                 meta_contents = meta_fh.read()
@@ -465,7 +476,6 @@ def main(argv):
     log.info("Running...")
 
 def get_frames():
-    #dist_viol_saved = False
 
     while True:
         start_time = time.time() # start time of the loop
@@ -488,7 +498,6 @@ def get_frames():
                 if obj.id != 4294967295:
                     p.append(obj.id)
                     if obj.id not in IDs:
-                        #IDs.append(obj.id)
                         x_center = (obj.head_bounding_box_2d[1][0] + obj.head_bounding_box_2d[0][0]) // 2
                         y_center = (obj.head_bounding_box_2d[2][1] + obj.head_bounding_box_2d[0][1]) // 2
                         people.append({ "x": x_center, "y": y_center, "id": obj.id })
@@ -504,16 +513,15 @@ def get_frames():
                                 log.info("Distance violation detected!")
                                 mycollection_dist.insert_one({ "timestamp": datetime.datetime.now() })
                                 dist_IDs.append(viol_tuple)
+                                if not playing:
+                                    alarmStart()
                                 break
                         i += 1
                     if dist_violation:
                         break
                     centroids_list.append(c0)
             
-            # if not dist_violation:
-            #     dist_viol_saved = False
-            
-            # Do the detection
+            # Do the face mask detection
             detections = detect(netMain, metaMain, image, thresh)
 
             log.info(chr(27) + "[2J"+"**** " + str(len(detections)) + " Results ****")
@@ -529,17 +537,12 @@ def get_frames():
                 # Coordinates are around the center
                 x_coord = int(bounds[0] - bounds[2]/2)
                 y_coord = int(bounds[1] - bounds[3]/2)
-                #boundingBox = [[x_coord, y_coord], [x_coord, y_coord + y_extent], [x_coord + x_extent, y_coord + y_extent], [x_coord + x_extent, y_coord]]
-                #i = 0
-                #idxs = []
                 for person in people:
                     if person['x'] > x_coord and person['x'] < x_coord + x_extent and person['y'] > y_coord and person['y'] < y_coord + y_extent:
                         dets.append({ "mask": label=="mask", "timestamp": datetime.datetime.now() })
                         IDs.append(person['id'])
-                        #idxs.append(i)
-                    #i += 1
-                #for idx in idxs:
-                #    people.pop(idx)
+                        if not playing and label == "no_mask":
+                            alarmStart()
                 x, y, z = get_object_depth(depth, bounds)
                 distance = math.sqrt(x * x + y * y + z * z)
                 distance = "{:.2f}".format(distance)
@@ -547,8 +550,6 @@ def get_frames():
             if dets:
                 mycollection.insert_many(dets)
             log.info("FPS: {}".format(1.0 / (time.time() - start_time)))
-            # log.info("IDs: {}".format(IDs))
-            # log.info("Dist IDs: {}".format(dist_IDs))
         else:
             continue
 

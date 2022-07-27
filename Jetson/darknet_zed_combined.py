@@ -17,6 +17,7 @@ import pyzed.sl as sl
 from flask import Flask, render_template, Response
 import atexit
 import pymongo
+import simpleaudio as sa
 
 # Get the top-level logger object
 log = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ mycollection = db["detections"]
 mycollection_dist = db["dist_violations"]
 
 IDs = []
-#people = []
+dist_IDs = []
 
 def sample(probs):
     s = sum(probs)
@@ -340,6 +341,19 @@ obj_runtime_param = None
 bodies = None
 dist_threshold = None
 
+audio_filename = 'alarm.wav'
+wave_obj = sa.WaveObject.from_wave_file(audio_filename)
+play_obj = None
+playing = False
+
+def alarmStart():
+    playing = True
+    play_obj = wave_obj.play()
+
+def alarmStop():
+    play_obj.stop()
+    playing = False
+
 def main(argv):
 
     global thresh, dist_threshold
@@ -347,13 +361,13 @@ def main(argv):
     thresh = 0.5
     darknet_path="./"
     config_path = darknet_path + "cfg/yolov4-tiny-face_mask.cfg"
-    weight_path = "yolov4-tiny-face_mask-800-augmented.weights"
+    weight_path = "yolov4-tiny-face_mask-best.weights"
     meta_path = "cfg/face_mask.data"
     svo_path = None
     zed_id = 0
-    dist_threshold = 1.0
+    dist_threshold = 1.5
 
-    help_str = 'darknet_zed.py -c <config> -w <weight> -m <meta> -t <threshold> -s <svo_file> -z <zed_id> -d <distance_threshold>'
+    help_str = 'darknet_zed_combined.py -c <config> -w <weight> -m <meta> -t <threshold> -s <svo_file> -z <zed_id> -d <distance_threshold>'
     try:
         opts, args = getopt.getopt(
             argv, "hc:w:m:t:s:z:", ["config=", "weight=", "meta=", "threshold=", "svo_file=", "zed_id=", "distance_threshold="])
@@ -439,8 +453,6 @@ def main(argv):
     if metaMain is None:
         metaMain = load_meta(meta_path.encode("ascii"))
     if altNames is None:
-        # In thon 3, the metafile default access craps out on Windows (but not Linux)
-        # Read the names file and create a list to feed to detect
         try:
             with open(meta_path) as meta_fh:
                 meta_contents = meta_fh.read()
@@ -467,7 +479,6 @@ def main(argv):
     log.info("Running...")
 
 def get_frames():
-    dist_viol_saved = False
 
     while True:
         start_time = time.time() # start time of the loop
@@ -485,32 +496,38 @@ def get_frames():
             centroids_list = []
             dist_violation = False
             people = []
+            p = []
             for obj in bodies.object_list:
-                if obj.id not in IDs and obj.id != 4294967295:
-                    #IDs.append(obj.id)
-                    x_center = (obj.head_bounding_box_2d[1][0] + obj.head_bounding_box_2d[0][0]) // 2
-                    y_center = (obj.head_bounding_box_2d[2][1] + obj.head_bounding_box_2d[0][1]) // 2
-                    people.append({ "x": x_center, "y": y_center, "id": obj.id })
-                c0 = obj.head_position
-                for c in centroids_list:
-                    d = math.sqrt((c[0]-c0[0])**2 + (c[1]-c0[1])**2 + (c[2]-c0[2])**2)
-                    if d < dist_threshold:
-                        dist_violation = True
-                        log.info("Distance violation detected!")
-                        cv2.rectangle(image, (0, 0), (500, 200), (255,255,255), -1)
-                        cv2.putText(image, "Distance violation", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
-                        if not dist_viol_saved:
-                            mycollection_dist.insert_one({ "timestamp": datetime.datetime.now() })
-                            dist_viol_saved = True
+                if obj.id != 4294967295:
+                    p.append(obj.id)
+                    if obj.id not in IDs:
+                        #IDs.append(obj.id)
+                        x_center = (obj.head_bounding_box_2d[1][0] + obj.head_bounding_box_2d[0][0]) // 2
+                        y_center = (obj.head_bounding_box_2d[2][1] + obj.head_bounding_box_2d[0][1]) // 2
+                        people.append({ "x": x_center, "y": y_center, "id": obj.id })
+                    c0 = obj.head_position
+                    i = 0
+                    for c in centroids_list:
+                        d = math.sqrt((c[0]-c0[0])**2 + (c[1]-c0[1])**2 + (c[2]-c0[2])**2)
+                        if d < dist_threshold:
+                            log.info("Distance violation detected!")
+                            cv2.rectangle(image, (0, 0), (500, 200), (255,255,255), -1)
+                            cv2.putText(image, "Distance violation", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+                            viol_tuple = [obj.id, p[i]]
+                            viol_tuple_rev = [p[i], obj.id]
+                            if (viol_tuple not in dist_IDs) and (viol_tuple_rev not in dist_IDs):
+                                dist_violation = True
+                                mycollection_dist.insert_one({ "timestamp": datetime.datetime.now() })
+                                dist_IDs.append(viol_tuple)
+                                if not playing:
+                                    alarmStart()
+                                break
+                        i += 1
+                    if dist_violation:
                         break
-                if dist_violation:
-                    break
-                centroids_list.append(c0)
-
-            if not dist_violation:
-                dist_viol_saved = False
+                    centroids_list.append(c0)
             
-            # Do the detection
+            # Do the face mask detection
             detections = detect(netMain, metaMain, image, thresh)
 
             log.info(chr(27) + "[2J"+"**** " + str(len(detections)) + " Results ****")
@@ -526,17 +543,12 @@ def get_frames():
                 # Coordinates are around the center
                 x_coord = int(bounds[0] - bounds[2]/2)
                 y_coord = int(bounds[1] - bounds[3]/2)
-                #boundingBox = [[x_coord, y_coord], [x_coord, y_coord + y_extent], [x_coord + x_extent, y_coord + y_extent], [x_coord + x_extent, y_coord]]
-                #i = 0
-                #idxs = []
                 for person in people:
                     if person['x'] > x_coord and person['x'] < x_coord + x_extent and person['y'] > y_coord and person['y'] < y_coord + y_extent:
                         dets.append({ "mask": label=="mask", "timestamp": datetime.datetime.now() })
                         IDs.append(person['id'])
-                        #idxs.append(i)
-                    #i += 1
-                #for idx in idxs:
-                #    people.pop(idx)
+                        if not playing and label == "no_mask":
+                            alarmStart()
                 thickness = 1
                 x, y, z = get_object_depth(depth, bounds)
                 distance = math.sqrt(x * x + y * y + z * z)
@@ -544,9 +556,14 @@ def get_frames():
                 cv2.rectangle(image, (x_coord - thickness, y_coord - thickness),
                               (x_coord + x_extent + thickness, y_coord + (18 + thickness*4)),
                               color_array[detection[3]], -1)
-                cv2.putText(image, label + " " +  (str(distance) + " m"),
-                            (x_coord + (thickness * 4), y_coord + (10 + thickness * 4)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                if str(distance) != '1.73': # Avoid displaying a wrong distance value when the depth map cannot be computed
+                    cv2.putText(image, label + " " +  (str(distance) + " m"),
+                                (x_coord + (thickness * 4), y_coord + (10 + thickness * 4)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                else:
+                    cv2.putText(image, label,
+                                (x_coord + (thickness * 4), y_coord + (10 + thickness * 4)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 cv2.rectangle(image, (x_coord - thickness, y_coord - thickness),
                               (x_coord + x_extent + thickness, y_coord + y_extent + thickness),
                               color_array[detection[3]], int(thickness*2))
